@@ -16,8 +16,8 @@
 #define NAME_MAX_LEN 64
 
 char buffer[BUFFER_SIZE] = {0}; 
-int clientID, clientToServerfd, clientToClientfd; 
-struct sockaddr_in heartBeatAddress, dataAddress, clientAddress;
+int clientID, clientToServerfd, clientToClientfd, gamefd, newGamefd; 
+struct sockaddr_in heartBeatAddress, dataAddress, clientAddress, gameAddress;
 char *ipInfo, *IPandPort;
 char name[NAME_MAX_LEN];
 
@@ -38,6 +38,7 @@ void intToString(int in, char *out)
     out[i] = '0' + (in % 10);
 }
 
+//the port which clients listens on for other players
 void createAPortForClientsGame()
 {
     if((clientToClientfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
@@ -59,8 +60,15 @@ void createAPortForClientsGame()
         if(bind(clientToClientfd, (struct sockaddr *)&clientAddress, sizeof(clientAddress)) < 0)      
             continue;
         else
-           break;   
+           break;  
+
     } 
+
+    if(listen(clientToClientfd, 1) < 0)   
+    {   
+        write(2, "Listening on client side failed.\n", 33);  
+        exit(1);   
+    }  
 
     char finalAdr[10];
     intToString(randomPort, finalAdr);
@@ -68,6 +76,69 @@ void createAPortForClientsGame()
     IPandPort = concat(ipInfo, finalAdr);
     IPandPort = concat(IPandPort, " ");
     puts(IPandPort);
+}
+
+void acceptOpponent()
+{
+    struct sockaddr_in addr;
+    int len = sizeof(addr);
+    if((newGamefd = accept(clientToClientfd, (struct sockaddr *)&addr, &len)) < 0)   
+    {   
+        write(2, "Accepting opponent failed.\n", 27);  
+        perror("ACCEPT");   
+        exit(1);   
+    }   
+    else
+        write(2, "Now wait for the game to begin.\n", 32); 
+}
+
+void establishGameConnection() 
+{
+    int connectStatus;
+
+    if((connectStatus = connect(gamefd, (struct sockaddr *)&gameAddress,  sizeof(gameAddress))) < 0) 
+    {
+        write(2, "Connection to opponent failed.\n", 31);
+        perror("CONNECTION");
+        exit(1);       
+    }
+    else
+    {
+        write(1, "Successfully connected to opponent! Now wait for the game to begin.\n", 68);
+    }    
+}
+
+//after finding opponent, the second user creates a new port for connection
+void createFinalGamePort(char* gameInfo) 
+{
+    char* temp, *gamePort, *gameIP;
+
+    temp = strtok(gameInfo, " ");
+
+    //because of one extra argument in specified mode
+    if(strcmp(temp, "specified") == 0)
+        temp = strtok(NULL, " ");
+
+    temp = strtok(NULL, " ");
+    gameIP = malloc(strlen(temp) + 1);
+    strcpy(gameIP, temp);
+    temp = strtok(NULL, " ");
+    gamePort = malloc(strlen(temp) + 1);
+    strcpy(gamePort, temp);
+
+    if((gamefd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
+    {
+        write(2, "Final game socket creation failed.\n", 36);
+        exit(1);
+    }
+
+    gameAddress.sin_family = AF_INET; 
+    puts(gameIP);  
+    gameAddress.sin_addr.s_addr = inet_addr(gameIP); 
+    puts(gamePort);
+    gameAddress.sin_port = htons(atoi(gamePort)); 
+
+    establishGameConnection();    
 }
 
 void getServerPortAndIP(char *info) 
@@ -136,6 +207,7 @@ void waitForAnswer()
     if(bytes == 0)
     {
         write(1, "Now please wait for connection...\n", 35);
+        acceptOpponent();
         close(clientToServerfd);
     }
     else if (bytes < 0) 
@@ -146,6 +218,10 @@ void waitForAnswer()
     {
         write(1, "Your opponenet IP and Port are:\n", 32);
         write(1, buffer, sizeof(buffer));
+        write(1, "\n", 1);
+        char* gameInfo = malloc(strlen(buffer) + 1);
+        strcpy(gameInfo, buffer);
+        createFinalGamePort(gameInfo);
     }
 }
 
