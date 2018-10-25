@@ -19,7 +19,7 @@
 #define MAX_BUFFER_SIZE 1024
 
 int serverID, server_TCP_ID, clientSockets[MAX_CLIENTS_COUNT] = {0}, maxServerDesciptor;
-char* clientRequests[MAX_CLIENTS_COUNT], *names[MAX_CLIENTS_COUNT];
+char* clientRequests[MAX_CLIENTS_COUNT], *names[MAX_CLIENTS_COUNT], *requests[MAX_CLIENTS_COUNT], *status[MAX_CLIENTS_COUNT];
 struct sockaddr_in serverAddress, serverTCPAddress;
 const char *message = "127.0.0.1 7758 \0";
 const char *tcpMessage = "Successfully connected to server.";
@@ -41,9 +41,24 @@ void sendHeartBeat()
 
 void extractNames(char *info, int index)
 {
-    char *name, *temp;
+    char *name, *temp, *requestedName;
 
     temp = strtok(info, " ");
+    if(strcmp(temp, "normal") == 0)
+    {
+        //requests -> specified user to be played with
+        status[index] = "normal";
+        requests[index] = "";
+    }
+    else if(strcmp("specified", temp) == 0)
+    {  
+        status[index] = "specified";
+        temp = strtok(NULL, " ");  
+        requestedName = malloc(strlen(temp)+ 1);
+        strcpy(requestedName, temp);
+        requests[index] = requestedName;
+    }
+    temp = strtok(NULL, " ");
     temp = strtok(NULL, " ");
     temp = strtok(NULL, " ");
     name = malloc(strlen(temp)+ 1);
@@ -53,7 +68,7 @@ void extractNames(char *info, int index)
     for(int i = 0; i < MAX_CLIENTS_COUNT; i++)
     {
         if(clientSockets[i] != 0)
-            printf("%d : %s\n", i, names[i]);
+            printf("%d : %s requested: %s with status : %s \n", i, names[i], requests[i], status[i]);
     }
 }
 
@@ -111,31 +126,75 @@ void addRequestToList(char* message, int index)
     clientRequests[index] = result;
 } 
 
-int findOpponent(int index) 
+int findNormal(int index)
 {
-    for(int i = 0; i < MAX_CLIENTS_COUNT; i++)   
-    {   
+    int someNormalUser = -1;
+    for(int i = 0; i < MAX_CLIENTS_COUNT; i++)
+    {
         if(i == index)
             continue;
-        if(clientSockets[i] != 0)   
-        {   
-            int len = strlen(clientRequests[i]);
-            if(send(clientSockets[index], clientRequests[i], len, 0) < 0)
-            {
-                write(2, "Sending opponent data failed.\n", 30);
-                return 0;
-            }
-            else
-            {
-                close(clientSockets[i]); 
-                close(clientSockets[index]);  
-                clientSockets[i] = 0;
-                clientSockets[index] = 0;
-                return 1;
-            }   
-        }   
-    } 
-    return 0;
+        else
+        {
+            if(clientSockets[i] != 0 && strcmp(status[i], "specified") == 0 && strcmp(requests[i], names[index]) == 0 )
+                return i;
+            else if(clientSockets[i] != 0 && strcmp(status[i], "normal") == 0)
+                someNormalUser = i;
+        }
+    }
+    return someNormalUser;
+}
+
+int findSpecific(int index)
+{
+    for(int i = 0; i < MAX_CLIENTS_COUNT; i++)
+    {
+        if(i == index)
+            continue;
+        else
+        {
+            if((clientSockets[i] != 0 && strcmp(status[i], "normal") == 0)
+                || (clientSockets[i] != 0 && strcmp(status[i], "specified") == 0 && strcmp(requests[i], names[index]) == 0 ) )
+                return i;
+        }
+    }
+    return -1;
+}
+
+void connectToOpponent(int index, int i)
+{
+    int len = strlen(clientRequests[i]);
+    if(send(clientSockets[index], clientRequests[i], len, 0) < 0)
+    {
+        write(2, "Sending opponent data failed.\n", 30);
+    }
+    else
+    {
+        write(1, "Two clients ", 12);
+        write(1, names[i], strlen(names[i]));
+        write(1, " and ", 5);
+        write(1, names[index], strlen(names[index]));
+        write(1, " are connecting...\n", 19);
+        close(clientSockets[i]); 
+        close(clientSockets[index]);  
+        clientSockets[i] = 0;
+        clientSockets[index] = 0;
+    }
+}
+
+void findOpponent(int index) 
+{
+    int userID = -1;
+    if(strcmp(status[index], "normal") == 0)
+    {
+        if((userID = findNormal(index) ) != -1) 
+            connectToOpponent(index, userID);  
+    }
+
+    else if(strcmp(status[index], "specified") == 0)
+    {
+        if((userID = findSpecific(index)) != -1)
+            connectToOpponent(index, userID); 
+    }
 }  
 
 int main(int argc, char const *argv[])

@@ -127,12 +127,33 @@ void checkServerAvailability()
     }
 }
 
+void waitForAnswer() 
+{
+    bzero((char *) &buffer, sizeof(buffer));
+    int bytes = recv(clientToServerfd, buffer, BUFFER_SIZE, 0);
+    printf("received count: %d\n", bytes);
+    //if server closed the socket, you close it too!
+    if(bytes == 0)
+    {
+        write(1, "Now please wait for connection...\n", 35);
+        close(clientToServerfd);
+    }
+    else if (bytes < 0) 
+    {
+        write(2, "Receiving opponent data failed.\n", 32);
+    }
+    else
+    {
+        write(1, "Your opponenet IP and Port are:\n", 32);
+        write(1, buffer, sizeof(buffer));
+    }
+}
+
 void establishConnection()
 {
     write(1, "Please enter your username.\n", 28);
     int bytesCount = read(0, name, NAME_MAX_LEN - 2);
     name[bytesCount - 1] = '\0';
-    // char* dataToBeSent = malloc(strlen(IPandPort)+ strlen(name) + 1);
     char* dataToBeSent  = concat(IPandPort, name);
 
     char answer[5];
@@ -144,7 +165,6 @@ void establishConnection()
         answer[bytesCount - 1] = '\0';
         if(strcmp(answer, "yes") == 0)
         {
-            dataToBeSent = concat("specified ", dataToBeSent);
             write(1, "Great! Now please enter the opponent's username.\n", 50);
             int bytesCount = read(0, answer, BUFFER_SIZE);
             answer[bytesCount - 1] = ' ';
@@ -152,32 +172,17 @@ void establishConnection()
             dataToBeSent = concat(dataToBeSent, " ");
             dataToBeSent = concat(answer, dataToBeSent);
             dataToBeSent = concat("specified ", dataToBeSent);
-            puts(dataToBeSent);
-            // sendDataToServer(dataToBeSent);
+            sendDataToServer(dataToBeSent);
+            waitForAnswer();
             break;
         }   
 
-        else if(strcmp(answer, "no ") == 0)
+        else if(strcmp(answer, "no") == 0)
         {
             dataToBeSent = concat("normal ", dataToBeSent);
             puts(dataToBeSent);
-            //sendDataToServer(dataToBeSent);
-            bzero((char *) &buffer, sizeof(buffer));
-            int bytes = recv(clientToServerfd, buffer, BUFFER_SIZE, 0);
-            //if server closed the socket, you close it too!
-            if(bytes == 0)
-            {
-                close(clientToServerfd);
-            }
-            else if (bytes < 0) 
-            {
-                write(2, "Receiving opponent data failed.\n", 32);
-            }
-            else
-            {
-                write(1, "Your opponenet IP and Port are:\n", 32);
-                write(1, buffer, sizeof(buffer));
-            }
+            sendDataToServer(dataToBeSent);
+            waitForAnswer();
             break;
         }
 
