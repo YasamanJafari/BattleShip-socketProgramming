@@ -88,6 +88,15 @@ void createAPortForClientsGame()
     // puts(IPandPort);
 }
 
+int getRemainingShipsCount()
+{
+    int shipCount = 0;
+    for(int i = 0; i < MAP_ROW * MAP_COLUMN * 2 - 1; i++)
+        if(map[i] == '1')
+            shipCount++;
+    return shipCount;
+}
+
 int checkIfFull(char *place)
 {
     int y, x;
@@ -98,7 +107,10 @@ int checkIfFull(char *place)
     if(map[20 * y + x] == '1')
     {
         map[20 * y + x] = '2';
-        return 1;
+        if(getRemainingShipsCount() == 0)
+            return 3;
+        else
+            return 1;
     }
 
     //already chose
@@ -141,7 +153,9 @@ void playGame(int playerTurn, int playerNum)
         } 
         write(1, buffer, strlen(buffer));
         write(1, "\n", 1);
-        if(strcmp(buffer, FULL_BLOCK) == 0 || strcmp(buffer, REPEATED_MOVE) == 0 )
+        if(strcmp(buffer, WIN_MESSAGE) == 0)
+            exit(1);
+        else if(strcmp(buffer, FULL_BLOCK) == 0 || strcmp(buffer, REPEATED_MOVE) == 0 )
             playGame(1, playerNum);
         else if(strcmp(buffer, EMPTY_BLOCK) == 0)
             playGame(0, playerNum);
@@ -168,7 +182,19 @@ void playGame(int playerTurn, int playerNum)
 
         int check = checkIfFull(moveInfo);
 
-        if(check == 2)
+        if(check == 3)
+        {
+            write(1, LOSE_MESSAGE, strlen(LOSE_MESSAGE));
+            write(1, "\n", 1);
+            if(send(fd, WIN_MESSAGE, strlen(WIN_MESSAGE), 0) < 0)
+            {
+                write(2, "Sending info to other player failed.\n", 37);
+                exit(1);
+            } 
+            exit(1);
+        }
+
+        else if(check == 2)
         {
             write(1, "Your opponent repeated a move. Wait for another move...\n", 56);
             if(send(fd, REPEATED_MOVE, strlen(REPEATED_MOVE), 0) < 0)
@@ -212,8 +238,9 @@ void readMap(char* fileName)
     }
 
     bytesRead = read(fd, map, MAP_ROW * 2 * MAP_COLUMN);
-    write(1, "This is how your map looks like: \n", 34);
+    write(1, "This is how your map looks like: \n\n", 35);
     write(1, map, strlen(map));
+    write(1, "\n", 1);
     close(fd);
 }
 
