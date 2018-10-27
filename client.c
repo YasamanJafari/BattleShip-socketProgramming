@@ -13,7 +13,7 @@
 
 #define BUFFER_SIZE 1024
 #define TIMEOUT 3
-#define BROADCAST_TIMEOUT 5
+#define BROADCAST_TIMEOUT 0.25
 #define LOCAL_HOST "127.0.0.1"
 #define IP_ADDRESS "239.255.255.250"
 #define INITIAL_PORT 1234
@@ -26,6 +26,7 @@
 #define REPEATED_MOVE "You have chosen this move before! Try another one!"
 #define FULL_BLOCK "Awesome! You have chosen a block with ship!"
 #define EMPTY_BLOCK "Oh no! You have chosen an empty block!"
+#define MAX_CLIENTS_COUNT 20
 
 char buffer[BUFFER_SIZE] = {0}; 
 int clientID, clientToServerfd, clientToClientfd, gamefd, newGamefd, broadcastFD, broadcastForkChild; 
@@ -34,7 +35,8 @@ char *ipInfo = LOCAL_HOST, *IPandPort;
 char name[NAME_MAX_LEN];
 char fileName[NAME_MAX_LEN];
 char map[(MAP_ROW * 2) * (MAP_COLUMN + 1) + 10];
-char * dataToBeSent;
+char * dataToBeSent, *friend, *currName;
+int isClientNormal;
 
 char* concat(const char *s1, const char *s2)
 {
@@ -323,30 +325,6 @@ void createFinalGamePort(char* gameInfo)
     establishGameConnection();    
 }
 
-void createFinalGameWithoutServer(char* gameInfo)
-{
-    char* temp, *gamePort, *gameIP;
-
-    temp = strtok(gameInfo, " ");
-    gameIP = malloc(strlen(temp) + 1);
-    strcpy(gameIP, temp);
-    temp = strtok(NULL, " ");
-    gamePort = malloc(strlen(temp) + 1);
-    strcpy(gamePort, temp);
-
-    if((gamefd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
-    {
-        write(2, "Final game socket creation failed. [Without server]\n", 52);
-        exit(1);
-    }
-
-    gameAddress.sin_family = AF_INET; 
-    gameAddress.sin_addr.s_addr = inet_addr(gameIP); 
-    gameAddress.sin_port = htons(atoi(gamePort)); 
-
-    establishGameConnection();   
-}
-
 void getServerPortAndIP(char *info) 
 {
     char *serverPort, *serverIP;
@@ -409,7 +387,7 @@ void waitForAnswer()
 {
     bzero((char *) &buffer, sizeof(buffer));
     int bytes = recv(clientToServerfd, buffer, BUFFER_SIZE, 0);
-    printf("received count: %d\n", bytes);
+    //printf("received count: %d\n", bytes);
     //if server closed the socket, you close it too!
     if(bytes == 0)
     {
@@ -432,11 +410,95 @@ void waitForAnswer()
     }
 }
 
+int findNormal(char* tempMessage)
+{
+    char* temp = strtok(tempMessage, " ");
+    char *type = malloc(strlen(tempMessage) + 1);
+    strcpy(type, temp);
+    tempMessage = strtok(NULL, " ");
+    char* tempName = malloc(strlen(tempMessage) + 1);
+    strcpy(tempName, tempMessage); 
+    //2 means immediate connection
+    if(strcmp(type, "specified") == 0 && strcmp(tempName, currName) == 0)
+        return 2;
+    //normal
+    else if(strcmp(type, "normal") == 0)
+        return 1;
+    //fail
+    return 0;
+}
+
+int findSpecific(char* tempMessage)
+{
+    char* temp = strtok(tempMessage, " ");
+    char *type = malloc(strlen(tempMessage) + 1);
+    strcpy(type, temp);
+    tempMessage = strtok(NULL, " ");
+    char* tempName = malloc(strlen(tempMessage) + 1);
+    strcpy(tempName, tempMessage); 
+    if(strcmp(type, "specified") == 0)
+        strtok(NULL, " ");
+    strtok(NULL, " ");
+    temp = strtok(NULL, " ");
+    char* otherName = malloc(strlen(temp) + 1);
+    strcpy(otherName, temp);
+    //connect immediately
+    if(strcmp(type, "specified") == 0 && strcmp(otherName, friend) == 0)
+        return 2;
+    else if(strcmp(otherName, friend) == 0 && strcmp(type, "normal") == 0)
+        return 2;
+    return 0;
+}
+
+void askForSpecificUserBroadcast()
+{
+    char answer[5];
+
+    while(1)
+    {
+        write(1, "Do you want to play with a specific user?(yes/no)\n", 50);
+        int bytesCount = read(0, answer, BUFFER_SIZE);
+        answer[bytesCount - 1] = '\0';
+        if(strcmp(answer, "yes") == 0)
+        {
+            isClientNormal = 0;
+            write(1, "Great! Now please enter the opponent's username.\n", 50);
+            int bytesCount = read(0, answer, BUFFER_SIZE);
+            answer[bytesCount - 1] = '\0';
+            bzero((char *) &friend, sizeof(friend));
+            friend = malloc(strlen(answer) + 1);
+            strcpy(friend, answer);
+            answer[bytesCount - 1] = ' ';
+            answer[bytesCount] = '\0';
+            dataToBeSent = concat(dataToBeSent, " ");
+            dataToBeSent = concat(answer, dataToBeSent);
+            dataToBeSent = concat("specified ", dataToBeSent);
+            break;
+        }   
+
+        else if(strcmp(answer, "no") == 0)
+        {
+            dataToBeSent = concat("normal ", dataToBeSent);
+            isClientNormal = 1;
+            break;
+        }
+
+        else
+        {
+            bzero((char *) &answer, sizeof(answer));
+            continue;
+        }
+    }
+}
+
 void readDataFromInput()
 {
     write(1, "Please enter your username.\n", 28);
     int bytesCount = read(0, name, BUFFER_SIZE - 2);
+    bzero((char *) &currName, sizeof(currName));
+    currName = malloc(strlen(name) + 1);
     name[bytesCount - 1] = '\0';
+    strcpy(currName, name);
     dataToBeSent = concat(IPandPort, " ");
     dataToBeSent  = concat(dataToBeSent, name);
 
@@ -502,7 +564,7 @@ void createBroadcastSocket(int clientPort)
     clientBroadcastAddress.sin_addr.s_addr = htonl(INADDR_ANY);
     clientBroadcastAddress.sin_port = htons(clientPort);
 
-    printf("%d \n", clientPort);
+    // printf("%d \n", clientPort);
 
     u_int broadcastApproval = 1;
     if(setsockopt(broadcastFD, SOL_SOCKET, SO_REUSEADDR, (char*) &broadcastApproval, sizeof(broadcastApproval)) < 0)
@@ -549,12 +611,47 @@ void sendForBroadcast()
 
 void receiveForBroadcast()
 {
-    write(1, "Waiting...\n", 11);
+    write(1, "Waiting...", 11);
     bzero((char *) &buffer, sizeof(buffer));
+    int bytes;
+
+    char * tempAnswer;
+    int somethingFound = 0;
+
+    char* tempInfo;
 
     //wait for answer
-    int bytes = recvfrom(broadcastFD, buffer, BUFFER_SIZE, 0, NULL, 0);
-    if (bytes < 0) 
+    for(int i = 0; i < MAX_CLIENTS_COUNT; i++)
+    {
+        bytes = recvfrom(broadcastFD, buffer, BUFFER_SIZE, 0, NULL, 0);
+        if(bytes > 0)
+        {
+            bzero((char *) &heartBeatAddress, sizeof(heartBeatAddress));
+            tempInfo = malloc(strlen(buffer) + 1);
+            strcpy(tempInfo, buffer);
+            int normalSearchStatus, specificSearchStatus;
+            if(isClientNormal == 1)
+                normalSearchStatus = findNormal(tempInfo);
+                
+            else if(isClientNormal == 0)
+                specificSearchStatus = findSpecific(tempInfo);   
+            if( (isClientNormal == 1 && normalSearchStatus == 2 ) || (isClientNormal == 0 && specificSearchStatus == 2) )
+            {
+                tempAnswer = malloc(strlen(buffer) + 1);
+                strcpy(tempAnswer, buffer);
+                break;
+            }
+            else if( (isClientNormal == 1 && normalSearchStatus == 0 ) || (isClientNormal == 0 && specificSearchStatus == 0) )
+                bytes = -1;
+            else if( (isClientNormal == 1 && normalSearchStatus == 1) )
+            {
+                somethingFound = 1;
+                tempAnswer = malloc(strlen(buffer) + 1);
+                strcpy(tempAnswer, buffer);
+            }
+        }
+    }
+    if (bytes < 0 && somethingFound == 0) 
     {
         broadcastForkChild = fork();
 
@@ -570,17 +667,12 @@ void receiveForBroadcast()
     }
     else
     {
-        char *info = malloc(strlen(buffer)+ 1);
-        strcpy(info, buffer);
-        if(strcmp(info, IPandPort) == 0)
-            receiveForBroadcast();
-        else
-        {
-            write(1, "Opponent found.\n", 16);
-            //close the child process
-            // close(forkStatus);
-            createFinalGameWithoutServer(info);
-        }
+        char *info = malloc(strlen(tempAnswer)+ 1);
+        strcpy(info, tempAnswer);
+        write(1, "Opponent found.\n", 16);
+        //close the child process
+        // close(forkStatus);
+        createFinalGamePort(info);
     }
 }
 
@@ -590,6 +682,7 @@ void broadcast()
 
     createAPortForClientsGame();
     readDataFromInput();
+    askForSpecificUserBroadcast();
 
     write(1, "You are waiting on: ", 20);
     write(1, IPandPort, strlen(IPandPort));
