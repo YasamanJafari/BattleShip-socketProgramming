@@ -17,6 +17,7 @@
 #define TCP_IP_ADDRESS "127.0.0.1"
 #define MAX_CLIENTS_COUNT 20
 #define MAX_BUFFER_SIZE 1024
+#define INTERVAL_SECONDS 1
 
 int serverID, server_TCP_ID, clientSockets[MAX_CLIENTS_COUNT] = {0}, maxServerDesciptor;
 char* clientRequests[MAX_CLIENTS_COUNT], *names[MAX_CLIENTS_COUNT], *requests[MAX_CLIENTS_COUNT], *status[MAX_CLIENTS_COUNT];
@@ -27,7 +28,6 @@ fd_set clientfds;
 
 void sendHeartBeat() 
 {
-	const int intervalSeconds = 1;
     if (sendto(serverID, message, strlen(message), 0, (struct sockaddr*) &serverAddress, sizeof(serverAddress)) < 0) 
     {
         write(2, "Sending heart beat failed.\n", 27);
@@ -36,7 +36,7 @@ void sendHeartBeat()
 
     write(1, "Heartbeat.\n", 11);
     signal(SIGALRM, sendHeartBeat);
-    alarm(intervalSeconds);
+    alarm(INTERVAL_SECONDS);
 }
 
 void extractNames(char *info, int index)
@@ -68,7 +68,15 @@ void extractNames(char *info, int index)
     for(int i = 0; i < MAX_CLIENTS_COUNT; i++)
     {
         if(clientSockets[i] != 0)
-            printf("%d : %s requested: %s with status : %s \n", i, names[i], requests[i], status[i]);
+        {
+            write(1, "Client : ", 9);
+            write(1, names[i], strlen(names[i]));
+            write(1, " with status : ", 15);
+            write(1, status[i], strlen(status[i]));
+            write(1, " requested ", 11);
+            write(1, requests[i], strlen(requests[i]));
+            write(1, "\n", 1);
+        }
     }
 }
 
@@ -277,7 +285,9 @@ int main(int argc, char const *argv[])
                     if((dataRead = read(clientSockets[i] , buffer, MAX_BUFFER_SIZE)) <= 0)   
                     {    
    
-                        write(1, "A client disconnected.\n", 23);          
+                        write(1, "A client disconnected : ", 24); 
+                        write(1, names[i], strlen(names[i])); 
+                        write(1, "\n", 1);        
                         close(clientSockets[i]);   
                         clientSockets[i] = 0;   
                     }   

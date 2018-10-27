@@ -9,14 +9,18 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h> 
+#include <signal.h>
 
 #define BUFFER_SIZE 1024
-#define TIMEOUT 4
+#define TIMEOUT 3
+#define BROADCAST_TIMEOUT 5
+#define LOCAL_HOST "127.0.0.1"
 #define IP_ADDRESS "239.255.255.250"
 #define INITIAL_PORT 1234
 #define NAME_MAX_LEN 64
 #define MAP_ROW 10
 #define MAP_COLUMN 10
+#define INTERVAL_SECONDS 1
 #define WIN_MESSAGE "You won! Congragulations!"
 #define LOSE_MESSAGE "You lost! Better luck next time!"
 #define REPEATED_MOVE "You have chosen this move before! Try another one!"
@@ -24,12 +28,13 @@
 #define EMPTY_BLOCK "Oh no! You have chosen an empty block!"
 
 char buffer[BUFFER_SIZE] = {0}; 
-int clientID, clientToServerfd, clientToClientfd, gamefd, newGamefd; 
-struct sockaddr_in heartBeatAddress, dataAddress, clientAddress, gameAddress;
-char *ipInfo, *IPandPort;
+int clientID, clientToServerfd, clientToClientfd, gamefd, newGamefd, broadcastFD, broadcastForkChild; 
+struct sockaddr_in heartBeatAddress, dataAddress, clientAddress, gameAddress, clientBroadcastAddress;
+char *ipInfo = LOCAL_HOST, *IPandPort;
 char name[NAME_MAX_LEN];
 char fileName[NAME_MAX_LEN];
 char map[(MAP_ROW * 2) * (MAP_COLUMN + 1) + 10];
+char * dataToBeSent;
 
 char* concat(const char *s1, const char *s2)
 {
@@ -46,6 +51,7 @@ void intToString(int in, char *out)
   for (; temp > 0; temp /= 10, len++);
   for (int i = len - 1; in > 0; in /= 10, i--)
     out[i] = '0' + (in % 10);
+  out[len + 1] = '\0';
 }
 
 //the port which clients listens on for other players
@@ -84,8 +90,7 @@ void createAPortForClientsGame()
     intToString(randomPort, finalAdr);
     ipInfo = concat(ipInfo, " ");
     IPandPort = concat(ipInfo, finalAdr);
-    IPandPort = concat(IPandPort, " ");
-    // puts(IPandPort);
+    IPandPort[strlen(IPandPort)] = '\0';
 }
 
 int getRemainingShipsCount()
@@ -244,20 +249,27 @@ void readMap(char* fileName)
     close(fd);
 }
 
-void acceptOpponent()
+void acceptOpponent(int isBroadcast)
 {
     struct sockaddr_in addr;
     int len = sizeof(addr);
+
     if((newGamefd = accept(clientToClientfd, (struct sockaddr *)&addr, &len)) < 0)   
     {   
-        write(2, "Accepting opponent failed.\n", 27);    
+        write(2, "Accepting opponent failed.\n", 27);  
+        if(isBroadcast == 1)
+            kill(broadcastForkChild, SIGTERM);  
         exit(1);   
     }   
     else
-        write(1, "Found an opponent! \n", 20);
+    {
+        if(isBroadcast == 1)
+            kill(broadcastForkChild, SIGTERM);
+        write(1, "\nFound an opponent! \n", 21);
         write(1, "Game began: \n", 13);
         write(1, "It's your turn: \n", 17);
-        playGame(1, 1); 
+        playGame(1, 1);  
+    }
 }
 
 void establishGameConnection() 
@@ -311,6 +323,30 @@ void createFinalGamePort(char* gameInfo)
     establishGameConnection();    
 }
 
+void createFinalGameWithoutServer(char* gameInfo)
+{
+    char* temp, *gamePort, *gameIP;
+
+    temp = strtok(gameInfo, " ");
+    gameIP = malloc(strlen(temp) + 1);
+    strcpy(gameIP, temp);
+    temp = strtok(NULL, " ");
+    gamePort = malloc(strlen(temp) + 1);
+    strcpy(gamePort, temp);
+
+    if((gamefd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
+    {
+        write(2, "Final game socket creation failed. [Without server]\n", 52);
+        exit(1);
+    }
+
+    gameAddress.sin_family = AF_INET; 
+    gameAddress.sin_addr.s_addr = inet_addr(gameIP); 
+    gameAddress.sin_port = htons(atoi(gamePort)); 
+
+    establishGameConnection();   
+}
+
 void getServerPortAndIP(char *info) 
 {
     char *serverPort, *serverIP;
@@ -350,13 +386,13 @@ void sendDataToServer(char *name)
     }
 }
 
-void checkServerAvailability() 
+int checkServerAvailability() 
 {
-    int receivedBytes;
     int bytes = recvfrom(clientID, buffer, BUFFER_SIZE, 0, NULL, 0);
     if (bytes < 0) 
     {
         write(2, "Server is not available.\n", 25);
+        return 0;
     }
     else
     {
@@ -365,6 +401,7 @@ void checkServerAvailability()
         strcpy(info, buffer);
         getServerPortAndIP(info);
         createAPortForClientsGame();
+        return 1;
     }
 }
 
@@ -377,7 +414,7 @@ void waitForAnswer()
     if(bytes == 0)
     {
         write(1, "Now please wait for connection...\n", 35);
-        acceptOpponent();
+        acceptOpponent(0);
         close(clientToServerfd);
     }
     else if (bytes < 0) 
@@ -395,17 +432,23 @@ void waitForAnswer()
     }
 }
 
-void establishConnection()
+void readDataFromInput()
 {
     write(1, "Please enter your username.\n", 28);
     int bytesCount = read(0, name, BUFFER_SIZE - 2);
     name[bytesCount - 1] = '\0';
-    char* dataToBeSent  = concat(IPandPort, name);
+    dataToBeSent = concat(IPandPort, " ");
+    dataToBeSent  = concat(dataToBeSent, name);
 
     write(1, "Now please enter your map's file name.\n", 39);
     bytesCount = read(0, fileName, BUFFER_SIZE);
     fileName[bytesCount - 1] = '\0';
     readMap(fileName);
+}
+
+void establishConnection()
+{
+    readDataFromInput();
 
     char answer[5];
 
@@ -431,7 +474,6 @@ void establishConnection()
         else if(strcmp(answer, "no") == 0)
         {
             dataToBeSent = concat("normal ", dataToBeSent);
-            // puts(dataToBeSent);
             sendDataToServer(dataToBeSent);
             waitForAnswer();
             break;
@@ -443,6 +485,118 @@ void establishConnection()
             continue;
         }
     }
+}
+
+void createBroadcastSocket(int clientPort)
+{
+    struct ip_mreq mreq;
+     //for broadcast socket
+    if( (broadcastFD = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+    {
+        write(2, "Broadcast socket creation failed.\n", 24);
+        exit(1);        
+    }
+
+    //address for client broadcast
+    clientBroadcastAddress.sin_family = AF_INET;
+    clientBroadcastAddress.sin_addr.s_addr = htonl(INADDR_ANY);
+    clientBroadcastAddress.sin_port = htons(clientPort);
+
+    printf("%d \n", clientPort);
+
+    u_int broadcastApproval = 1;
+    if(setsockopt(broadcastFD, SOL_SOCKET, SO_REUSEADDR, (char*) &broadcastApproval, sizeof(broadcastApproval)) < 0)
+    {
+       write(2, "setsockopt for client broadcast failed.\n", 30);
+       exit(1);
+    }
+
+    if( bind(broadcastFD, (struct sockaddr*) &clientBroadcastAddress, sizeof(clientBroadcastAddress)) < 0) 
+    {
+        write(2, "Client broadcast bind failed.\n", 30);
+        exit(1);
+    }
+
+    struct timeval tv;
+    tv.tv_sec = BROADCAST_TIMEOUT;
+    tv.tv_usec = BROADCAST_TIMEOUT * 1000;
+    if(setsockopt(broadcastFD, SOL_SOCKET, SO_RCVTIMEO, &tv,sizeof(tv)) < 0) 
+    {
+        write(2, "Setting timeout for client broadcast failed.\n", 24);
+    }
+
+    mreq.imr_multiaddr.s_addr = inet_addr(IP_ADDRESS);
+    mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+    if(setsockopt(broadcastFD, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char*) &mreq, sizeof(mreq)) < 0)
+    {
+        write(2, "setsockopt failed. [client broadcast]\n", 38);
+        exit(1);
+    }
+}
+
+void sendForBroadcast()
+{
+    write(1, ".", 1);
+    if (sendto(broadcastFD, dataToBeSent, strlen(dataToBeSent), 0, (struct sockaddr*) &clientBroadcastAddress, sizeof(clientBroadcastAddress)) < 0) 
+    {
+        write(2, "Sending on client broadcast socket failed.\n", 43);
+        exit(1);
+    }
+
+    signal(SIGALRM, sendForBroadcast);
+    alarm(INTERVAL_SECONDS);
+}
+
+void receiveForBroadcast()
+{
+    write(1, "Waiting...\n", 11);
+    bzero((char *) &buffer, sizeof(buffer));
+
+    //wait for answer
+    int bytes = recvfrom(broadcastFD, buffer, BUFFER_SIZE, 0, NULL, 0);
+    if (bytes < 0) 
+    {
+        broadcastForkChild = fork();
+
+        //child sends info
+        if(broadcastForkChild == 0)
+            sendForBroadcast();
+
+        else
+        {
+            acceptOpponent(1);
+            // close(broadcastFD);
+        }
+    }
+    else
+    {
+        char *info = malloc(strlen(buffer)+ 1);
+        strcpy(info, buffer);
+        if(strcmp(info, IPandPort) == 0)
+            receiveForBroadcast();
+        else
+        {
+            write(1, "Opponent found.\n", 16);
+            //close the child process
+            // close(forkStatus);
+            createFinalGameWithoutServer(info);
+        }
+    }
+}
+
+void broadcast()
+{
+    struct ip_mreq mreq;
+
+    createAPortForClientsGame();
+    readDataFromInput();
+
+    write(1, "You are waiting on: ", 20);
+    write(1, IPandPort, strlen(IPandPort));
+    write(1, " for someone to connect to you. \n", 33);
+    write(1, "Searching...\n", 13);
+
+    receiveForBroadcast();
 }
 
 int main(int argc, char const *argv[])
@@ -458,6 +612,8 @@ int main(int argc, char const *argv[])
        return 1;
     }
 
+
+    //for heartbeat socket
     if((clientID = socket(AF_INET, SOCK_DGRAM, 0)) < 0) 
     {
         write(2, "Socket creation failed.\n", 24);
@@ -473,6 +629,7 @@ int main(int argc, char const *argv[])
 
     bzero((char *) &heartBeatAddress, sizeof(heartBeatAddress));
 
+    //addressForHeartbeat
     heartBeatAddress.sin_family = AF_INET;
 	heartBeatAddress.sin_addr.s_addr = htonl(INADDR_ANY);
 	heartBeatAddress.sin_port = htons(heartBeatPort);
@@ -499,8 +656,15 @@ int main(int argc, char const *argv[])
         return 1;
     }
 
-    checkServerAvailability();
-    establishConnection();
+    int serverIsAvailable = checkServerAvailability();
+
+    if(serverIsAvailable == 1)
+        establishConnection();
+    else if(serverIsAvailable == 0)
+    {
+        createBroadcastSocket(clientPort);
+        broadcast();
+    }
 
     while(1) {}
 
